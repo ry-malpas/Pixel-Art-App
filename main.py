@@ -3,18 +3,20 @@ from tkinter import ttk, filedialog, messagebox, colorchooser
 from PIL import Image, ImageDraw
 
 class PixelEditorApp:
+    SHAPE_TOOLS = ('line', 'square', 'diamond')
+
     def __init__(self, root):
         self.root = root
         self.root.title("Pixel Editor")
         self.root.geometry("900x800")
         
-        self.CELL_SIZE = 20
-        self.GRID_W = 32
-        self.GRID_H = 32
-        self.total_width = self.GRID_W * self.CELL_SIZE
-        self.total_height = self.GRID_H * self.CELL_SIZE
+        self.cell_size = 20
+        self.grid_w = 32
+        self.grid_h = 32
+        self.total_width = self.grid_w * self.cell_size
+        self.total_height = self.grid_h * self.cell_size
         
-        self.grid_data = [[(255, 255, 255) for _ in range(self.GRID_W)] for _ in range(self.GRID_H)]
+        self.grid_data = [[(255, 255, 255) for _ in range(self.grid_w)] for _ in range(self.grid_h)]
         
         self.undo_stack = []
         self.max_history = 50
@@ -29,6 +31,9 @@ class PixelEditorApp:
         self.zoom_level = 1.0
         self.scroll_x = 0
         self.scroll_y = 0
+        
+        self.shape_start = None
+        self.shape_current = None
         
         self.setup_ui()
         self.setup_menu()
@@ -90,6 +95,18 @@ class PixelEditorApp:
         self.btn_erase = ttk.Button(tool_frame, text="Erase", command=lambda: self.switch_tool('erase'))
         self.btn_erase.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
 
+        tool_frame2 = ttk.Frame(left_panel)
+        tool_frame2.pack(fill=tk.X, pady=(0, 5))
+
+        self.btn_line = ttk.Button(tool_frame2, text="Line", command=lambda: self.switch_tool('line'))
+        self.btn_line.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+
+        self.btn_square = ttk.Button(tool_frame2, text="Square", command=lambda: self.switch_tool('square'))
+        self.btn_square.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+
+        self.btn_diamond = ttk.Button(tool_frame2, text="Diamond", command=lambda: self.switch_tool('diamond'))
+        self.btn_diamond.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+
 
         zoom_frame = ttk.LabelFrame(left_panel, text="View Options", padding=(2, 3))
         zoom_frame.pack(fill=tk.X, pady=(2, 5))
@@ -130,14 +147,12 @@ class PixelEditorApp:
             bg='#e0e0e0', 
             highlightthickness=2,
             highlightbackground='#888888',
-            bd=0,
-            xscrollcommand=self.scroll_x_scrollbar.set,
-            yscrollcommand=self.scroll_y_scrollbar.set
+            bd=0
         )
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        self.scroll_x_scrollbar.config(command=lambda arg: self.scroll_x(arg))
-        self.scroll_y_scrollbar.config(command=lambda arg: self.scroll_y(arg))
+        self.scroll_x_scrollbar.config(command=self.on_scroll_x)
+        self.scroll_y_scrollbar.config(command=self.on_scroll_y)
 
 
         self.canvas.bind("<Button-1>", self.on_click_start)   
@@ -159,15 +174,28 @@ class PixelEditorApp:
 
 
     def switch_tool(self, tool_name):
+        self.shape_start = None
+        self.shape_current = None
+        self.drag_start = None
+
         self.current_tool = tool_name
         
         self.btn_edit.config(state='normal')
         self.btn_erase.config(state='normal')
+        self.btn_line.config(state='normal')
+        self.btn_square.config(state='normal')
+        self.btn_diamond.config(state='normal')
         
         if tool_name == 'edit':
             self.update_status(f"Tool: Paint (Size: {self.brush_size}, Color: {self.selected_hex.upper()})")
-        else:
+        elif tool_name == 'erase':
             self.update_status("Erase tool selected (paints white)")
+        elif tool_name == 'line':
+            self.update_status(f"Line tool: click & drag between two points (Size: {self.brush_size})")
+        elif tool_name == 'square':
+            self.update_status(f"Square tool: click & drag to set opposite corners (Size: {self.brush_size})")
+        elif tool_name == 'diamond':
+            self.update_status(f"Diamond tool: click & drag to set opposite corners (Size: {self.brush_size})")
 
     def set_brush_size(self, size_str):
         try:
@@ -228,60 +256,186 @@ class PixelEditorApp:
 
     def set_grid_size(self):
         new_width = tk.simpledialog.askinteger("Grid Width", 
-                                  f"Enter number of tiles (current: {self.GRID_W})",
-                                  initialvalue=self.GRID_W,
+                                  f"Enter number of tiles (current: {self.grid_w})",
+                                  initialvalue=self.grid_w,
                                   minvalue=8)
         
         if new_width and 0 < new_width <= 256:
             new_height = tk.simpledialog.askinteger("Grid Height", 
-                                          f"Enter number of tiles (current: {self.GRID_H})",
-                                          initialvalue=self.GRID_H,
+                                          f"Enter number of tiles (current: {self.grid_h})",
+                                          initialvalue=self.grid_h,
                                           minvalue=8)
             
             if new_height and 0 < new_height <= 256:
-                self.GRID_W = new_width
-                self.GRID_H = new_height
+                self.grid_w = new_width
+                self.grid_h = new_height
                 
-                self.total_width = self.GRID_W * self.CELL_SIZE
-                self.total_height = self.GRID_H * self.CELL_SIZE
+                self.total_width = self.grid_w * self.cell_size
+                self.total_height = self.grid_h * self.cell_size
                 
-                max_brush_size = min(self.GRID_W, self.GRID_H)
+                max_brush_size = min(self.grid_w, self.grid_h)
                 if self.brush_size > max_brush_size:
                     self.brush_size = max_brush_size
                 
-                self.grid_data = [[(255, 255, 255) for _ in range(self.GRID_W)] 
-                                  for _ in range(self.GRID_H)]
+                self.grid_data = [[(255, 255, 255) for _ in range(self.grid_w)] 
+                                  for _ in range(self.grid_h)]
                 self.undo_stack = []
                 
                 self._redraw_all()
                 
-                self.update_status(f"Grid resized: {self.GRID_W}×{self.GRID_H}")
+                self.update_status(f"Grid resized: {self.grid_w}×{self.grid_h}")
 
 
     def show_about(self):
-        messagebox.showinfo("About", "Pixel Editor\nSingle Pixel Brush with Undo")
+        messagebox.showinfo("About", "Pixel Editor\nBrush, Line, Diamond & Square tools with Undo")
 
     def _redraw_all(self):
         self.canvas.delete('all')
         
-        for r in range(self.GRID_H):
-            for c in range(self.GRID_W):
+        for r in range(self.grid_h):
+            for c in range(self.grid_w):
                 color_tuple = self.grid_data[r][c]
                 hex_color = self.rgb_to_hex(color_tuple[0], color_tuple[1], color_tuple[2])
                 
-                x0, y0 = c * self.CELL_SIZE * self.zoom_level + self.scroll_x, r * self.CELL_SIZE * self.zoom_level + self.scroll_y
-                x1, y1 = (c + 1) * self.CELL_SIZE * self.zoom_level + self.scroll_x, (r + 1) * self.CELL_SIZE * self.zoom_level + self.scroll_y
+                x0, y0 = c * self.cell_size * self.zoom_level + self.scroll_x, r * self.cell_size * self.zoom_level + self.scroll_y
+                x1, y1 = (c + 1) * self.cell_size * self.zoom_level + self.scroll_x, (r + 1) * self.cell_size * self.zoom_level + self.scroll_y
                 
                 self.canvas.create_rectangle(
                     x0, y0, x1 - 1, y1 - 1,
                     fill=hex_color,
                     outline=''
                 )
+        
+        self._update_scrollbars()
+
+    def _event_to_cell(self, event):
+        col = int((event.x - self.scroll_x) / (self.cell_size * self.zoom_level))
+        row = int((event.y - self.scroll_y) / (self.cell_size * self.zoom_level))
+        return row, col
+
+    def _clamp_cell(self, row, col):
+        row = max(0, min(row, self.grid_h - 1))
+        col = max(0, min(col, self.grid_w - 1))
+        return row, col
+
+    def _bresenham_line(self, r0, c0, r1, c1):
+        cells = []
+        x0, y0 = c0, r0
+        x1, y1 = c1, r1
+        dx = abs(x1 - x0)
+        sx = 1 if x0 < x1 else -1
+        dy = -abs(y1 - y0)
+        sy = 1 if y0 < y1 else -1
+        err = dx + dy
+
+        while True:
+            cells.append((y0, x0))
+            if x0 == x1 and y0 == y1:
+                break
+            e2 = 2 * err
+            if e2 >= dy:
+                err += dy
+                x0 += sx
+            if e2 <= dx:
+                err += dx
+                y0 += sy
+
+        return cells
+
+    def _rect_outline_cells(self, r0, c0, r1, c1):
+        top = min(r0, r1)
+        bottom = max(r0, r1)
+        left = min(c0, c1)
+        right = max(c0, c1)
+
+        cells = []
+        for c in range(left, right + 1):
+            cells.append((top, c))
+            cells.append((bottom, c))
+        for r in range(top, bottom + 1):
+            cells.append((r, left))
+            cells.append((r, right))
+
+        return cells
+
+    def _diamond_outline_cells(self, r0, c0, r1, c1):
+        top = min(r0, r1)
+        bottom = max(r0, r1)
+        left = min(c0, c1)
+        right = max(c0, c1)
+        mid_r = (top + bottom) // 2
+        mid_c = (left + right) // 2
+
+        cells = []
+        cells += self._bresenham_line(top, mid_c, mid_r, left)
+        cells += self._bresenham_line(top, mid_c, mid_r, right)
+        cells += self._bresenham_line(bottom, mid_c, mid_r, left)
+        cells += self._bresenham_line(bottom, mid_c, mid_r, right)
+        return cells
+
+    def _get_shape_base_cells(self, tool, start, end):
+        r0, c0 = start
+        r1, c1 = end
+        if tool == 'line':
+            return self._bresenham_line(r0, c0, r1, c1)
+        elif tool == 'square':
+            return self._rect_outline_cells(r0, c0, r1, c1)
+        elif tool == 'diamond':
+            return self._diamond_outline_cells(r0, c0, r1, c1)
+        return []
+
+    def _apply_brush(self, base_cells):
+        offsets = self._get_brush_offsets()
+        cells = set()
+        for (row, col) in base_cells:
+            for dx, dy in offsets:
+                r = row + dy
+                c = col + dx
+                if 0 <= r < self.grid_h and 0 <= c < self.grid_w:
+                    cells.add((r, c))
+        return cells
+
+    def _draw_shape_preview(self, start, end):
+        base_cells = self._get_shape_base_cells(self.current_tool, start, end)
+        preview_cells = self._apply_brush(base_cells)
+        hex_color = self.selected_hex
+
+        for (row, col) in preview_cells:
+            x0 = col * self.cell_size * self.zoom_level + self.scroll_x
+            y0 = row * self.cell_size * self.zoom_level + self.scroll_y
+            x1 = (col + 1) * self.cell_size * self.zoom_level + self.scroll_x
+            y1 = (row + 1) * self.cell_size * self.zoom_level + self.scroll_y
+
+            self.canvas.create_rectangle(
+                x0, y0, x1 - 1, y1 - 1,
+                fill=hex_color,
+                outline=''
+            )
+
+    def _commit_shape(self, start, end):
+        base_cells = self._get_shape_base_cells(self.current_tool, start, end)
+        final_cells = self._apply_brush(base_cells)
+
+        for (row, col) in final_cells:
+            self.grid_data[row][col] = self.selected_color
 
     def on_click_start(self, event):
-        col = int((event.x - self.scroll_x) / (self.CELL_SIZE * self.zoom_level))
-        row = int((event.y - self.scroll_y) / (self.CELL_SIZE * self.zoom_level))
-        
+        row, col = self._event_to_cell(event)
+
+        if self.current_tool in self.SHAPE_TOOLS:
+            row, col = self._clamp_cell(row, col)
+
+            self.undo_stack.append(self.get_grid_snapshot())
+            if len(self.undo_stack) > self.max_history:
+                self.undo_stack.pop(0)
+
+            self.shape_start = (row, col)
+            self.shape_current = (row, col)
+
+            self._redraw_all()
+            self._draw_shape_preview(self.shape_start, self.shape_current)
+            return
+
         if not self.drag_start:
             self.undo_stack.append(self.get_grid_snapshot())
             if len(self.undo_stack) > self.max_history:
@@ -294,10 +448,17 @@ class PixelEditorApp:
         self._redraw_all()
     
     def on_click_move(self, event):
-        col = int((event.x - self.scroll_x) / (self.CELL_SIZE * self.zoom_level))
-        row = int((event.y - self.scroll_y) / (self.CELL_SIZE * self.zoom_level))
-        
-        if 0 <= row < self.GRID_H and 0 <= col < self.GRID_W:
+        row, col = self._event_to_cell(event)
+
+        if self.current_tool in self.SHAPE_TOOLS:
+            if self.shape_start is not None:
+                row, col = self._clamp_cell(row, col)
+                self.shape_current = (row, col)
+                self._redraw_all()
+                self._draw_shape_preview(self.shape_start, self.shape_current)
+            return
+
+        if 0 <= row < self.grid_h and 0 <= col < self.grid_w:
             if (self.drag_start is not None):
                 prev_col = self.drag_start[1]
                 prev_row = self.drag_start[0]
@@ -308,6 +469,15 @@ class PixelEditorApp:
 
 
     def on_click_end(self, event):
+        if self.current_tool in self.SHAPE_TOOLS:
+            if self.shape_start is not None and self.shape_current is not None:
+                self._commit_shape(self.shape_start, self.shape_current)
+            self.shape_start = None
+            self.shape_current = None
+            self._redraw_all()
+            self.update_status(f"{self.current_tool.capitalize()} drawn")
+            return
+
         self.drag_start = None
     
     def _get_brush_offsets(self):
@@ -321,7 +491,7 @@ class PixelEditorApp:
         return cells
 
     def _paint_at(self, col, row):
-        if not (0 <= row < self.GRID_H and 0 <= col < self.GRID_W):
+        if not (0 <= row < self.grid_h and 0 <= col < self.grid_w):
             return
         
         cells = self._get_brush_offsets()
@@ -330,7 +500,7 @@ class PixelEditorApp:
             new_col = col + dx
             new_row = row + dy
             
-            if 0 <= new_row < self.GRID_H and 0 <= new_col < self.GRID_W:
+            if 0 <= new_row < self.grid_h and 0 <= new_col < self.grid_w:
                 old_color = self.grid_data[new_row][new_col]
                 
                 if self.current_tool == 'edit':
@@ -359,11 +529,13 @@ class PixelEditorApp:
         confirm = messagebox.askyesno("Discard?", "Unsaved changes will be lost.")
         if confirm:
             self.drag_start = None
+            self.shape_start = None
+            self.shape_current = None
             
             self.undo_stack = []
             
-            self.grid_data = [[(255, 255, 255) for _ in range(self.GRID_W)] 
-                              for _ in range(self.GRID_H)]
+            self.grid_data = [[(255, 255, 255) for _ in range(self.grid_w)] 
+                              for _ in range(self.grid_h)]
             
             self.brush_size = 1
             self.brush_var.set("1")
@@ -389,24 +561,70 @@ class PixelEditorApp:
             img = Image.new("RGB", (self.total_width, self.total_height))
             draw = ImageDraw.Draw(img)
             
-            for r in range(self.GRID_H):
-                for c in range(self.GRID_W):
+            for r in range(self.grid_h):
+                for c in range(self.grid_w):
                     color_tuple = self.grid_data[r][c]
                     
-                    x0, y0 = c * self.CELL_SIZE, r * self.CELL_SIZE
-                    x1, y1 = (c + 1) * self.CELL_SIZE, (r + 1) * self.CELL_SIZE
+                    x0, y0 = c * self.cell_size, r * self.cell_size
+                    x1, y1 = (c + 1) * self.cell_size, (r + 1) * self.cell_size
                     
                     draw.rectangle([x0, y0, x1 - 1, y1 - 1], fill=color_tuple[:3])
                 
-            img.save(file_path, format='PNG')
+            img.save(file_path)
             self.update_status(f"Saved: {file_path}")
+            
 
 
-    def scroll_x(self, arg):
-        self.scroll_x = int(arg)
+    def _clamp_offset(self, offset, content, view):
+        if content <= view:
+            return 0
+        return max(view - content, min(0, offset))
 
-    def scroll_y(self, arg):
-        self.scroll_y = int(arg)
+    def on_scroll_x(self, *args):
+        content_w = self.total_width * self.zoom_level
+        view_w = max(self.canvas.winfo_width(), 1)
+        
+        if args[0] == 'moveto':
+            self.scroll_x = -float(args[1]) * content_w
+        elif args[0] == 'scroll':
+            step = self.cell_size * self.zoom_level
+            self.scroll_x -= float(args[1]) * step
+        
+        self.scroll_x = self._clamp_offset(self.scroll_x, content_w, view_w)
+        self._redraw_all()
+
+    def on_scroll_y(self, *args):
+        content_h = self.total_height * self.zoom_level
+        view_h = max(self.canvas.winfo_height(), 1)
+        
+        if args[0] == 'moveto':
+            self.scroll_y = -float(args[1]) * content_h
+        elif args[0] == 'scroll':
+            step = self.cell_size * self.zoom_level
+            self.scroll_y -= float(args[1]) * step
+        
+        self.scroll_y = self._clamp_offset(self.scroll_y, content_h, view_h)
+        self._redraw_all()
+
+    def _update_scrollbars(self):
+        content_w = self.total_width * self.zoom_level
+        content_h = self.total_height * self.zoom_level
+        view_w = max(self.canvas.winfo_width(), 1)
+        view_h = max(self.canvas.winfo_height(), 1)
+        
+        if content_w <= view_w:
+            self.scroll_x_scrollbar.set(0, 1)
+        else:
+            first = -self.scroll_x / content_w
+            last = (view_w - self.scroll_x) / content_w
+            self.scroll_x_scrollbar.set(first, last)
+        
+        if content_h <= view_h:
+            self.scroll_y_scrollbar.set(0, 1)
+        else:
+            first = -self.scroll_y / content_h
+            last = (view_h - self.scroll_y) / content_h
+            self.scroll_y_scrollbar.set(first, last)
 
     def on_zoom_change(self, value):
         percentage = float(value.split('%')[0])
@@ -438,13 +656,16 @@ class PixelEditorApp:
             self.on_zoom_change(f"{new_zoom * 100}%")
 
     def on_mousewheel(self, event):
-        if event.num == 4 or event.delta > 0:
-            self.scroll_y -= 20
-        else:
-            self.scroll_y += 20
+        step = self.cell_size * self.zoom_level
         
-        self.scroll_x = max(0, min(self.scroll_x, self.total_width * self.zoom_level - 40))
-        self.scroll_y = max(0, min(self.scroll_y, self.total_height * self.zoom_level - 40))
+        if event.num == 4 or event.delta > 0:
+            self.scroll_y += step
+        else:
+            self.scroll_y -= step
+        
+        content_h = self.total_height * self.zoom_level
+        view_h = max(self.canvas.winfo_height(), 1)
+        self.scroll_y = self._clamp_offset(self.scroll_y, content_h, view_h)
         
         self._redraw_all()
 
@@ -457,9 +678,9 @@ class PixelEditorApp:
         if file_path:
             import json
             settings = {
-                'grid_width': self.GRID_W,
-                'grid_height': self.GRID_H,
-                'cell_size': self.CELL_SIZE,
+                'grid_width': self.grid_w,
+                'grid_height': self.grid_h,
+                'cell_size': self.cell_size,
                 'brush_size': self.brush_size,
                 'zoom_level': self.zoom_level,
                 'scroll_x': self.scroll_x,
@@ -480,5 +701,6 @@ class PixelEditorApp:
 if __name__ == "__main__":
     root = tk.Tk()
     app = PixelEditorApp(root)
+    root.update_idletasks()
     app._redraw_all()
     root.mainloop()
